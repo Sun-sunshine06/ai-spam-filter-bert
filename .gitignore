@@ -1,0 +1,33 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments
+venv/
+.venv/
+
+# IDEs
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data / artifacts
+*.zip
+sms_spam_v4/
+tf_model/
+
+# Model/cache
+.cache/
+.hf/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+*.log
