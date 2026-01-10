@@ -1,33 +1,10 @@
-﻿# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-*.so
-
-# Virtual environments
-venv/
-.venv/
-
-# IDEs
-.idea/
-.vscode/
-
-# OS
+﻿__pycache__/
+*.pyc
 .DS_Store
-Thumbs.db
-
-# Data / artifacts
-*.zip
+.vscode/
+.idea/
+venv/
 sms_spam_v4/
+*.zip
 tf_model/
-
-# Model/cache
-.cache/
-.hf/
-
-# Jupyter
-.ipynb_checkpoints/
-
-# Logs
-*.log
+《Python 与人工智能》大作业总结报告.md

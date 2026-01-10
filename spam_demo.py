@@ -1,11 +1,22 @@
 ﻿import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+import logging
+import re
+
+# Suppress TF/Transformers verbosity before importing them
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
+logging.basicConfig(level=logging.ERROR)
+logging.getLogger("tensorflow").setLevel(logging.ERROR)
+logging.getLogger("transformers").setLevel(logging.ERROR)
+
 import numpy as np
 import pandas as pd
 import tensorflow as tf
 from tensorflow import keras
 from transformers import DistilBertTokenizerFast, TFDistilBertForSequenceClassification
-import re
+from transformers import logging as hf_logging
+
+hf_logging.set_verbosity_error()
 
 print("=" * 50)
 print("AI SMS spam firewall")
@@ -161,7 +172,19 @@ extra_spam = [
     "Texting job, remote assistant, no experience",
     "Optimization task, app ranking work, reply to start",
     "Booking assistant needed, online tasks only",
-    "Texting job available, onboarding by message"
+    "Texting job available, onboarding by message",
+
+    # Additional FN coverage (sextortion / money mule)
+    "I hacked your cloud storage, private videos will leak if you refuse to pay",
+    "Pay now or I leak your private video to all contacts",
+    "I have your private video, transfer funds to keep it secret",
+    "Move funds for us and keep 10% commission",
+    "Need your account to move funds, keep commission each transfer",
+
+    # Stock scam / money mule additions
+    "Inside info says this stock will explode tomorrow",
+    "Insider tip: stock explode with guaranteed return",
+    "Transaction assistance needed to move funds, keep commission"
 ]
 
 extra_labels = [1] * len(extra_spam)
@@ -188,52 +211,98 @@ loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
 metrics = [tf.keras.metrics.SparseCategoricalAccuracy("accuracy")]
 model.compile(optimizer=optimizer, loss=loss, metrics=metrics)
 
-# === 4. Train (fine-tuning) ===
-print("\nStarting fine-tuning...")
-indices = np.arange(len(sentences))
-np.random.shuffle(indices)
+MODEL_DIR = "tf_model"
 
-split_idx = int(0.9 * len(indices))
-train_idx = indices[:split_idx]
-val_idx = indices[split_idx:]
 
-train_texts = sentences[train_idx]
-train_labels = labels[train_idx]
-val_texts = sentences[val_idx]
-val_labels = labels[val_idx]
+def save_artifacts(model_dir=MODEL_DIR):
+    os.makedirs(model_dir, exist_ok=True)
+    model.save_pretrained(model_dir)
+    tokenizer.save_pretrained(model_dir)
 
-train_encodings = tokenizer(
-    list(train_texts),
-    truncation=True,
-    padding=True,
-    max_length=max_len
-)
-val_encodings = tokenizer(
-    list(val_texts),
-    truncation=True,
-    padding=True,
-    max_length=max_len
-)
 
-train_dataset = tf.data.Dataset.from_tensor_slices((dict(train_encodings), train_labels))
-train_dataset = train_dataset.shuffle(1024).batch(16)
-val_dataset = tf.data.Dataset.from_tensor_slices((dict(val_encodings), val_labels))
-val_dataset = val_dataset.batch(16)
+def load_artifacts(model_dir=MODEL_DIR):
+    if not os.path.isdir(model_dir):
+        return False
+    required_files = [
+        os.path.join(model_dir, "config.json"),
+        os.path.join(model_dir, "tokenizer.json")
+    ]
+    if not all(os.path.exists(p) for p in required_files):
+        return False
+    global tokenizer, model
+    tokenizer = DistilBertTokenizerFast.from_pretrained(model_dir)
+    model = TFDistilBertForSequenceClassification.from_pretrained(
+        model_dir,
+        num_labels=2,
+        use_safetensors=False
+    )
+    model.compile(optimizer=optimizer, loss=loss, metrics=metrics)
+    return True
 
-history = model.fit(
-    train_dataset,
-    epochs=2,
-    validation_data=val_dataset,
-    verbose=1
-)
+
+def fine_tune_model():
+    print("\nStarting fine-tuning...")
+    indices = np.arange(len(sentences))
+    np.random.shuffle(indices)
+
+    split_idx = int(0.9 * len(indices))
+    train_idx = indices[:split_idx]
+    val_idx = indices[split_idx:]
+
+    train_texts = sentences[train_idx]
+    train_labels = labels[train_idx]
+    val_texts = sentences[val_idx]
+    val_labels = labels[val_idx]
+
+    train_encodings = tokenizer(
+        list(train_texts),
+        truncation=True,
+        padding=True,
+        max_length=max_len
+    )
+    val_encodings = tokenizer(
+        list(val_texts),
+        truncation=True,
+        padding=True,
+        max_length=max_len
+    )
+
+    train_dataset = tf.data.Dataset.from_tensor_slices((dict(train_encodings), train_labels))
+    train_dataset = train_dataset.shuffle(1024).batch(16)
+    val_dataset = tf.data.Dataset.from_tensor_slices((dict(val_encodings), val_labels))
+    val_dataset = val_dataset.batch(16)
+
+    model.fit(
+        train_dataset,
+        epochs=2,
+        validation_data=val_dataset,
+        verbose=1
+    )
+    save_artifacts()
 
 
 def calculate_hybrid_score(text, model_score):
     risk_score = float(model_score)
     text_lower = text.lower()
+    norm_map = {
+        "0": "o",
+        "1": "l",
+        "3": "e",
+        "4": "a",
+        "5": "s",
+        "7": "t",
+        "8": "b",
+        "9": "g",
+        "@": "a",
+        "$": "s",
+        "!": "i"
+    }
+    text_norm = text_lower
+    for k, v in norm_map.items():
+        text_norm = text_norm.replace(k, v)
 
     # Regex detectors
-    url_re = re.compile(r"(https?://\S+|www\.\S+|bit\.ly/\S+|t\.co/\S+)", re.I)
+    url_re = re.compile(r"(https?://\S+|www\.\S+|bit\.ly/\S+|t\.co/\S+|b!tly/\S+|\b[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\S*)", re.I)
     domain_re = re.compile(r"^(?:https?://)?(?:www\.)?([^/\s:]+)", re.I)
     money_re = re.compile(r"(\$\s?\d+(?:\.\d+)?|\b\d{1,3}(?:,\d{3})+\b|\b\d+(?:k|K)\b)")
     phone_re = re.compile(r"(\+?\d[\d\-\s\(\)]{6,}\d)")
@@ -246,7 +315,11 @@ def calculate_hybrid_score(text, model_score):
             "docs.google.com",
             "drive.google.com",
             "zoom.us",
-            "teams.microsoft.com"
+            "teams.microsoft.com",
+            "teams.microsoft",
+            "docs.google",
+            "drive.google",
+            "github.com"
         }
         for wl in whitelist:
             if domain == wl or domain.endswith("." + wl):
@@ -254,21 +327,45 @@ def calculate_hybrid_score(text, model_score):
         return False
 
     url_hit = False
+    whitelisted_url = False
     for m in url_re.finditer(text):
         url = m.group(0)
         dm = domain_re.search(url)
         domain = dm.group(1).lower() if dm else ""
-        if domain and not is_whitelisted_domain(domain):
+        if domain and is_whitelisted_domain(domain):
+            whitelisted_url = True
+            break
+        if domain:
             url_hit = True
             hits.append("url")
             break
+    if whitelisted_url:
+        return 0.0, ["url_whitelist"]
 
     money_hit = bool(money_re.search(text))
     phone_hit = bool(phone_re.search(text))
 
-    if money_hit:
+    complaint_context = re.search(r"\b(lost|sad|bad|scammed|regret)\b", text_norm) is not None
+    repay_context = re.search(r"\b(owed|borrowed|return|repay|paid back)\b", text_norm) is not None
+    news_context = re.search(r"\b(article|news|read|discuss|report)\b", text_norm) is not None
+    otp_context = re.search(r"\b(verification code|otp|one time code)\b", text_norm) is not None
+    if otp_context and re.search(r"\b\d{4,8}\b", text_lower):
+        risk_score -= 0.3
+        hits.append("otp_whitelist")
+    if news_context:
+        risk_score -= 0.2
+        hits.append("news_context")
+
+    money_action_re = re.compile(
+        r"(\b(send|earn|pay|transfer)\b.{0,20}\b(bitcoin|btc|crypto|eth|usdt|money|cash|usd)\b"
+        r"|\b(bitcoin|btc|crypto|eth|usdt|money|cash|usd)\b.{0,20}\b(send|earn|pay|transfer)\b)",
+        re.I
+    )
+
+    if money_hit and not repay_context and not complaint_context and money_action_re.search(text_norm):
         risk_score += 0.25
-        hits.append("money")
+        hits.append("money_action")
+
     if phone_hit:
         risk_score += 0.2
         hits.append("phone")
@@ -284,47 +381,34 @@ def calculate_hybrid_score(text, model_score):
         r"|\b(bitcoin|btc|usdt|crypto|ethereum|eth)\b.{0,12}\b(lost|loss|scammed|bad|invested|regret|complain|complained)\b)",
         re.I
     )
-    if crypto_action_re.search(text):
-        risk_score += 0.35
+    if crypto_action_re.search(text_norm):
+        risk_score += 0.85
         hits.append("crypto_action")
-    elif crypto_negative_re.search(text):
-        risk_score += 0.05
+    elif crypto_negative_re.search(text_norm):
+        risk_score += 0.0
         hits.append("crypto_negative")
 
-    # Context-aware work-from-home logic
-    wfh_re = re.compile(r"\bwork from home\b", re.I)
-    wfh_context_re = re.compile(r"\b(earn|job|hiring|income|offer|salary|position)\b", re.I)
-    if wfh_re.search(text) and wfh_context_re.search(text):
-        risk_score += 0.35
-        hits.append("wfh_recruit")
-
-    # Pattern rules for missing FN categories
+    # Blacklist patterns for FN categories
     pattern_rules = [
-        ("sextortion", re.compile(r"\b(private video|leak your photos|pay silence money|silence money|webcam footage|we recorded you)\b", re.I), 0.7),
-        ("stock_inside", re.compile(r"\b(inside info|insider tip|stock explode|guaranteed return)\b", re.I), 0.5),
-        ("money_mule", re.compile(r"\b(move funds|keep a cut|transaction assistance|money mule)\b", re.I), 0.6),
-        ("stealth_job", re.compile(r"\b(texting job|booking assistant|optimization task)\b", re.I), 0.4),
-        ("bank_alert", re.compile(r"\b(bank alert|account locked|verify identity|reset password)\b", re.I), 0.25),
-        ("delivery", re.compile(r"\b(fedex|dhl|ups|delivery failed|parcel|package)\b", re.I), 0.25),
-        ("refund", re.compile(r"\b(refund|tax refund|irs notice)\b", re.I), 0.2),
-        ("urgent", re.compile(r"\b(urgent|act now|immediately|final notice|asap)\b", re.I), 0.2)
+        ("sextortion", re.compile(r"\b(private video|private photos|leak)\b", re.I), 0.85),
+        ("sextortion_threat", re.compile(r"\b(hacked|cloud storage)\b.*\b(private video|private photos|leak)\b|\b(private video|private photos|leak)\b.*\b(hacked|cloud storage)\b", re.I), 0.9),
+        ("stock_scam", re.compile(r"\b(inside info|insider tip|stock explode|guaranteed return)\b", re.I), 0.8),
+        ("money_mule", re.compile(r"\b(transaction assistance|move funds|keep commission)\b", re.I), 0.8)
     ]
 
     for name, pattern, penalty in pattern_rules:
-        if pattern.search(text):
+        if pattern.search(text_norm):
             risk_score += penalty
             hits.append(name)
 
     if url_hit:
         risk_score += 0.35
 
-    # Weighted critical combo
-    urgent_hit = re.search(r"\b(urgent|act now|immediately|final notice|asap)\b", text_lower) is not None
-    if url_hit and urgent_hit:
-        risk_score += 0.8
-        hits.append("url+urgent")
+    high_risk_tags = {"sextortion", "sextortion_threat", "crypto_action", "stock_scam", "money_mule"}
+    if high_risk_tags.intersection(hits):
+        risk_score = max(risk_score, 0.7)
 
-    return min(risk_score, 0.999), hits
+    return min(max(risk_score, 0.0), 0.999), hits
 
 
 def predict_interactive():
@@ -378,5 +462,7 @@ def predict_interactive():
         print(f"   --------------------------------------------------")
 
 
-predict_interactive()
-
+if __name__ == "__main__":
+    if not load_artifacts():
+        fine_tune_model()
+    predict_interactive()

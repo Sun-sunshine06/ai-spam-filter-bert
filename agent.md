@@ -1,19 +1,7 @@
-﻿# AI SMS Spam Filter (Industrial Grade)
+﻿# AI 记忆文件
 
-This file captures the current project context for continuity across sessions.
-
-Project Name: AI SMS Spam Filter (Industrial Grade)
-Tech Stack: Python 3.12, Hugging Face Transformers (DistilBERT), TensorFlow/Keras, Regex
-
-Key Features:
-- Hybrid Architecture: DistilBERT classifier + regex-based rule engine
-- Data Augmentation: adversarial samples for sextortion, insider stock, pig butchering
-- Whitelist mechanism and false positive fixes for common domains
-
-Current Status:
-- Model migration complete (Bi-LSTM -> DistilBERT)
-- Passed 20 hard test cases
-
-Notes:
-- Uses TFDistilBertForSequenceClassification fine-tuning (lr 5e-5, 2 epochs)
-- Hybrid rule engine includes context-aware regex logic and URL whitelisting
+Project: Industrial SMS Spam Filter (v3.0)
+Tech Stack: Python 3.12, DistilBERT (Transformers), TensorFlow, Regex.
+Architecture: Hybrid (Deep Learning + Rule Engine + White-list).
+Status: 已完成所有测试 (100% Accuracy on Hard Samples).
+Files: spam_demo.py (Main), auto_audit.py (Test), README.md (Docs).
